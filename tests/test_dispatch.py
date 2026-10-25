@@ -6,7 +6,6 @@ from orchestration import (
     DispatchLedger,
     RecordingSink,
     approve,
-    build_orchestrator,
     initial_state,
     ledger_key,
     pending_interrupt,
@@ -29,8 +28,8 @@ class FlakySink(RecordingSink):
             raise ConnectionError("connection reset after the server accepted the publish")
 
 
-def test_approval_resume_publishes_exactly_once(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_approval_resume_publishes_exactly_once(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "once"), "thread-1")
     ask = pending_interrupt(orch, "thread-1")
 
@@ -39,8 +38,8 @@ def test_approval_resume_publishes_exactly_once(make_config, sink):
     assert len(sink.records) == 1
 
 
-def test_ledger_row_is_sent_after_dispatch(make_config, tmp_path):
-    orch = build_orchestrator(make_config())
+def test_ledger_row_is_sent_after_dispatch(make_orchestrator, make_config, tmp_path):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "ledger"), "thread-1")
     ask = pending_interrupt(orch, "thread-1")
     run(orch, approve(ask["payload_sha"]), "thread-1")
@@ -48,9 +47,9 @@ def test_ledger_row_is_sent_after_dispatch(make_config, tmp_path):
     assert DispatchLedger(tmp_path / "ledger.sqlite").state(ledger_key("thread-1", "t1")) == "sent"
 
 
-def test_crash_after_publish_is_not_retried_blindly(make_config, tmp_path):
+def test_crash_after_publish_is_not_retried_blindly(make_orchestrator, make_config, tmp_path):
     flaky = FlakySink()
-    orch = build_orchestrator(make_config(sink=flaky))
+    orch = make_orchestrator(make_config(sink=flaky))
     run(orch, initial_state("t1", "crash"), "thread-1")
     ask = pending_interrupt(orch, "thread-1")
 
@@ -65,8 +64,8 @@ def test_crash_after_publish_is_not_retried_blindly(make_config, tmp_path):
     assert DispatchLedger(tmp_path / "ledger.sqlite").state(ledger_key("thread-1", "t1")) == "claimed"
 
 
-def test_second_version_of_a_dispatched_task_is_not_sent_again(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_second_version_of_a_dispatched_task_is_not_sent_again(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "versions"), "thread-1")
     ask = pending_interrupt(orch, "thread-1")
     run(orch, approve(ask["payload_sha"]), "thread-1")
@@ -84,8 +83,8 @@ def test_second_version_of_a_dispatched_task_is_not_sent_again(make_config, sink
     assert [r["draft"] for r in sink.records] == [ask["draft"]]
 
 
-def test_ledger_key_separates_thread_and_task_ids(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_ledger_key_separates_thread_and_task_ids(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     for thread_id, task_id in (("acme:1", "7"), ("acme", "1:7")):
         run(orch, initial_state(task_id, "collision"), thread_id)
         ask = pending_interrupt(orch, thread_id)

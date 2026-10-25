@@ -2,11 +2,11 @@
 
 from langgraph.types import Command
 
-from orchestration import approve, build_orchestrator, initial_state, pending_interrupt, reject, run, thread_config
+from orchestration import approve, initial_state, pending_interrupt, reject, run, thread_config
 
 
-def test_reject_dispatches_nothing(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_reject_dispatches_nothing(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "rejection"), "thread-1")
     assert pending_interrupt(orch, "thread-1") is not None
 
@@ -16,8 +16,8 @@ def test_reject_dispatches_nothing(make_config, sink):
     assert pending_interrupt(orch, "thread-1") is None
 
 
-def test_stale_approval_does_not_dispatch_an_edited_draft(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_stale_approval_does_not_dispatch_an_edited_draft(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "binding"), "thread-1")
     first = pending_interrupt(orch, "thread-1")
 
@@ -45,8 +45,8 @@ def test_stale_approval_does_not_dispatch_an_edited_draft(make_config, sink):
     assert [r["draft"] for r in sink.records] == [second["draft"]]
 
 
-def test_approval_without_hash_fails_closed(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_approval_without_hash_fails_closed(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "fail closed"), "thread-1")
     assert pending_interrupt(orch, "thread-1") is not None
 
@@ -56,8 +56,8 @@ def test_approval_without_hash_fails_closed(make_config, sink):
     assert pending_interrupt(orch, "thread-1") is not None
 
 
-def test_unrecognised_decision_re_asks(make_config, sink):
-    orch = build_orchestrator(make_config())
+def test_unrecognised_decision_re_asks(make_orchestrator, make_config, sink):
+    orch = make_orchestrator(make_config())
     run(orch, initial_state("t1", "typo"), "thread-1")
     assert pending_interrupt(orch, "thread-1") is not None
 

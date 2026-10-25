@@ -1,7 +1,7 @@
 [project]
 name = "multi-agent-orchestration-proof"
 version = "0.1.0"
-description = "A LangGraph supervisor with two workers that refuses a malformed handoff instead of dropping it and never sends the same task twice, with the footgun matrix that proves it"
+description = "A LangGraph supervisor with two workers that refuses a malformed handoff instead of dropping it and never sends the same task twice on a thread, with the footgun matrix that proves it"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Guillermo Mustafa" }]

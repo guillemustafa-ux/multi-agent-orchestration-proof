@@ -77,9 +77,15 @@ class Orchestrator:
     config: OrchestratorConfig
     connection: sqlite3.Connection | None = None
 
+    def __enter__(self) -> Orchestrator:
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
     @property
     def durability(self) -> Literal["sync", "async", "exit"]:
-        """Checkpoints are written before the next step starts, so a hard crash loses nothing."""
+        """Checkpoints are written before the next step starts: a hard crash loses at most the step in flight."""
         if self.config.footgun == "07-durability-exit":
             # Checkpoints only when the run pauses or ends: a process killed mid-run leaves none.
             return "exit"
@@ -121,42 +127,47 @@ def build_orchestrator(cfg: OrchestratorConfig) -> Orchestrator:
         task = state["task"]
         update: dict[str, Any] = {"inbox": None}
         inbox = state.get("inbox")
-        if inbox is not None:
-            if cfg.footgun == "03-untyped-handoff":
+        issued = (state.get("handoffs") or [None])[-1]
+        # A reply is due whenever the last handoff on record is one the supervisor issued:
+        # validated replies are appended behind it, so "last from supervisor" means unanswered.
+        reply_due = issued is not None and issued["from_agent"] == "supervisor"
+        if cfg.footgun == "03-untyped-handoff":
+            if inbox is not None:
                 # The untyped supervisor trusts the dict, routes on a string, and treats a
                 # destination it does not know as "the worker is finished".
                 update.update(_apply_payload(inbox.get("payload") or {}))
                 if inbox.get("to_agent") != "supervisor":
                     return Command(goto=END, update={**update, "status": "done", "pending": []})
-            else:
-                issued = state["handoffs"][-1]  # the handoff this reply must answer
-                try:
-                    handoff = Handoff.model_validate(inbox)
-                    if handoff.to_agent != "supervisor":
-                        raise HandoffContractError(
-                            f"handoff addressed to {handoff.to_agent!r}, expected 'supervisor'"
-                        )
-                    if handoff.task_id != task["task_id"]:
-                        raise HandoffContractError(
-                            f"handoff for task {handoff.task_id!r}, expected {task['task_id']!r}"
-                        )
-                    if handoff.from_agent != issued["to_agent"]:
-                        raise HandoffContractError(
-                            f"handoff from {handoff.from_agent!r}, expected from {issued['to_agent']!r}"
-                        )
-                    if handoff.attempt != issued["attempt"]:
-                        raise HandoffContractError(
-                            f"handoff attempt {handoff.attempt}, expected {issued['attempt']}"
-                        )
-                    reply = REPLY_MODELS[handoff.from_agent].model_validate(handoff.payload)
-                except (ValidationError, HandoffContractError) as exc:
-                    # Refuse the run and keep the task pending; never route on a guess.
-                    return Command(
-                        goto=END,
-                        update={**update, "status": "contract_error", "error": f"{type(exc).__name__}: {exc}"},
+        elif reply_due or inbox is not None:
+            try:
+                if inbox is None:
+                    raise HandoffContractError(f"{issued['to_agent']} returned no handoff")
+                handoff = Handoff.model_validate(inbox)
+                if handoff.to_agent != "supervisor":
+                    raise HandoffContractError(
+                        f"handoff addressed to {handoff.to_agent!r}, expected 'supervisor'"
                     )
-                update.update(_apply_payload(reply.model_dump(exclude_none=True)))
-                update["handoffs"] = [handoff.model_dump()]
+                if handoff.task_id != task["task_id"]:
+                    raise HandoffContractError(
+                        f"handoff for task {handoff.task_id!r}, expected {task['task_id']!r}"
+                    )
+                if handoff.from_agent != issued["to_agent"]:
+                    raise HandoffContractError(
+                        f"handoff from {handoff.from_agent!r}, expected from {issued['to_agent']!r}"
+                    )
+                if handoff.attempt != issued["attempt"]:
+                    raise HandoffContractError(
+                        f"handoff attempt {handoff.attempt}, expected {issued['attempt']}"
+                    )
+                reply = REPLY_MODELS[handoff.from_agent].model_validate(handoff.payload)
+            except (ValidationError, HandoffContractError) as exc:
+                # Refuse the run and keep the task pending; never route on a guess.
+                return Command(
+                    goto=END,
+                    update={**update, "status": "contract_error", "error": f"{type(exc).__name__}: {exc}"},
+                )
+            update.update(_apply_payload(reply.model_dump(exclude_none=True)))
+            update["handoffs"] = [handoff.model_dump()]
 
         view = {**state, **update}
         target = _next_agent(view)

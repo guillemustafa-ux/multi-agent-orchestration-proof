@@ -26,8 +26,8 @@ def run_suite(footgun: str | None) -> tuple[int, list[str], int]:
     if footgun:
         env["ORCH_FOOTGUN"] = footgun
     proc = subprocess.run(
-        # pyproject already passes -q; a second -q would silence the "N passed" summary line.
-        [sys.executable, "-m", "pytest", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
+        # -o addopts= drops the pyproject options so this runner owns the verbosity.
+        [sys.executable, "-m", "pytest", "-o", "addopts=", "-q", "-rfE", "--tb=no", "-p", "no:cacheprovider"],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -36,8 +36,8 @@ def run_suite(footgun: str | None) -> tuple[int, list[str], int]:
     broken = sorted(
         line.split()[1] for line in proc.stdout.splitlines() if line.startswith(("FAILED ", "ERROR "))
     )
-    passed_match = re.search(r"(\d+) passed", proc.stdout)
-    passed = int(passed_match.group(1)) if passed_match else 0
+    passed_counts = re.findall(r"(\d+) passed", proc.stdout)
+    passed = int(passed_counts[-1]) if passed_counts else 0  # the summary line comes last
     return proc.returncode, broken, passed
 
 

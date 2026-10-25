@@ -14,7 +14,7 @@ class OrchestratorConfig:
     sink: Sink
     researcher: WorkerFn = default_researcher
     writer: WorkerFn = default_writer
-    # Handoffs to workers allowed per thread before the supervisor gives up. recursion_limit
+    # Handoffs to workers allowed per task submission before the supervisor gives up. recursion_limit
     # stays as LangGraph's backstop; this is the budget that stops a loop while it is cheap.
     max_handoffs: int = 8
     # Exactly one regression from footguns/manifest.json, or None for the hardened baseline.

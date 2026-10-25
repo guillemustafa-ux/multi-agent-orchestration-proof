@@ -51,19 +51,19 @@ class Handoff(BaseModel):
 class ResearcherReply(BaseModel):
     model_config = STRICT
 
-    notes: str = Field(min_length=1)
+    notes: str = Field(min_length=1, pattern=r"\S")  # at least one non-blank character
 
 
 class WriterReply(BaseModel):
     model_config = STRICT
 
-    draft: str | None = None
+    draft: str | None = Field(default=None, min_length=1, pattern=r"\S")
     needs_more_research: bool = False
 
     @model_validator(mode="after")
     def _draft_or_request(self) -> WriterReply:
-        if self.draft is None and not self.needs_more_research:
-            raise ValueError("a writer reply carries a draft or asks for more research")
+        if (self.draft is None) == (not self.needs_more_research):
+            raise ValueError("exactly one of a draft or a request for more research")
         return self
 
 

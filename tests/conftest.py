@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from orchestration import OrchestratorConfig, RecordingSink, default_researcher, default_writer
+from orchestration import OrchestratorConfig, RecordingSink, build_orchestrator, default_researcher, default_writer
 
 # One footgun at a time, selected by the environment so the same suite runs under every
 # row of footguns/manifest.json. Unset means the hardened baseline.
@@ -53,3 +53,18 @@ class CallLog:
 @pytest.fixture
 def call_log():
     return CallLog()
+
+
+@pytest.fixture
+def make_orchestrator():
+    """build_orchestrator, with every checkpoint connection closed when the test ends."""
+    built = []
+
+    def _make(config):
+        orch = build_orchestrator(config)
+        built.append(orch)
+        return orch
+
+    yield _make
+    for orch in built:
+        orch.close()
