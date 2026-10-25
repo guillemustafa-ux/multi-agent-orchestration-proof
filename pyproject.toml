@@ -1,0 +1,29 @@
+[project]
+name = "multi-agent-orchestration-proof"
+version = "0.1.0"
+description = "A LangGraph supervisor with two workers that never loses and never duplicates a handoff, with the footgun matrix that proves it"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Guillermo Mustafa" }]
+dependencies = [
+  "langgraph>=1.0,<2",
+  "langgraph-checkpoint-sqlite>=2.0",
+  # langgraph-checkpoint 4.3 imports Reviver(allowed_objects=...), which older 1.x cores lack.
+  "langchain-core>=1.7",
+  "pydantic>=2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["orchestration"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
