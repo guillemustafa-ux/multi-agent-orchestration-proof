@@ -14,8 +14,10 @@
         "tests/test_dispatch.py::test_ledger_row_is_sent_after_dispatch",
         "tests/test_dispatch.py::test_second_version_of_a_dispatched_task_is_not_sent_again",
         "tests/test_durability.py::test_hard_process_death_resumes_from_the_last_checkpoint",
+        "tests/test_durability.py::test_manual_recovery_supplies_the_handoff_through_the_inbox",
         "tests/test_durability.py::test_restart_after_crash_resumes_without_rerunning_researcher",
-        "tests/test_handoffs.py::test_happy_path_dispatches_once_after_approval"
+        "tests/test_handoffs.py::test_happy_path_dispatches_once_after_approval",
+        "tests/test_handoffs.py::test_resubmission_after_contract_error_runs_the_task_again"
       ]
     },
     {
@@ -31,6 +33,7 @@
       "name": "03-untyped-handoff",
       "reintroduces": "The supervisor trusts the worker's dict and routes on a string; a destination it does not know means 'finished', and no reply at all is just re-dispatched. A malformed handoff ends the run as a success with nothing dispatched; forged, mistyped, blank or missing replies are applied as if valid.",
       "expected_failures": [
+        "tests/test_handoffs.py::test_blank_researcher_notes_are_a_contract_error",
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[addressed-to-researcher]",
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[blank-draft]",
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[draft-and-request-at-once]",
@@ -43,7 +46,8 @@
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[misspelled-payload-key]",
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[no-reply]",
         "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[other-task]",
-        "tests/test_handoffs.py::test_malformed_handoff_is_rejected_not_dropped"
+        "tests/test_handoffs.py::test_malformed_handoff_is_rejected_not_dropped",
+        "tests/test_handoffs.py::test_resubmission_after_contract_error_runs_the_task_again"
       ]
     },
     {

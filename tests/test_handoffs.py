@@ -70,7 +70,7 @@ def _payload(**fields):
         (_payload(draft="done", needs_more_research=True), "exactly one of a draft or a request for more research"),
         (_payload(draft=""), "String should have at least 1 character"),
         (_payload(draft="   "), "String should match pattern"),
-        (lambda reply: None, "returned no handoff"),
+        (lambda reply: None, "no handoff for writer attempt 1: the inbox is empty"),
     ],
     ids=[
         "addressed-to-researcher",
@@ -124,4 +124,45 @@ def test_loop_budget_stops_ping_pong_before_recursion_limit(make_orchestrator, m
     assert state["pending"] == ["t1"]
     assert len(call_log.calls) <= 8
     assert state["handoffs_used"] == 8
+    assert sink.records == []
+
+
+def test_resubmission_after_contract_error_runs_the_task_again(make_orchestrator, make_config, sink, call_log):
+    broken = {"yes": True}
+
+    def writer(handoff):
+        reply = default_writer(handoff)
+        if broken["yes"]:
+            reply["payload"] = {"draft": 12345}
+        return reply
+
+    orch = make_orchestrator(make_config(researcher=call_log.wrap("researcher", default_researcher), writer=writer))
+    state = run(orch, initial_state("t1", "resubmit"), "thread-1")
+    assert state["status"] == "contract_error"
+
+    # The worker is fixed and the same task is submitted again on the same thread.
+    broken["yes"] = False
+    state = run(orch, initial_state("t1", "resubmit"), "thread-1")
+    assert state["status"] == "running"
+    assert call_log.count("researcher") == 2
+    ask = pending_interrupt(orch, "thread-1")
+    assert ask is not None
+
+    state = run(orch, approve(ask["payload_sha"]), "thread-1")
+    assert state["status"] == "dispatched"
+    assert len(sink.records) == 1
+
+
+def test_blank_researcher_notes_are_a_contract_error(make_orchestrator, make_config, sink):
+    def blank_researcher(handoff):
+        reply = default_researcher(handoff)
+        reply["payload"] = {"notes": "   "}
+        return reply
+
+    orch = make_orchestrator(make_config(researcher=blank_researcher))
+    state = run(orch, initial_state("t1", "blank notes"), "thread-1")
+
+    assert state["status"] == "contract_error"
+    assert "String should match pattern" in state["error"]
+    assert state["pending"] == ["t1"]
     assert sink.records == []

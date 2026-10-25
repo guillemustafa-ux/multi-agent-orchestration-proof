@@ -128,9 +128,13 @@ def build_orchestrator(cfg: OrchestratorConfig) -> Orchestrator:
         update: dict[str, Any] = {"inbox": None}
         inbox = state.get("inbox")
         issued = (state.get("handoffs") or [None])[-1]
-        # A reply is due whenever the last handoff on record is one the supervisor issued:
-        # validated replies are appended behind it, so "last from supervisor" means unanswered.
-        reply_due = issued is not None and issued["from_agent"] == "supervisor"
+        # A reply is due when this submission has issued a handoff (handoffs_used resets per
+        # submission; the handoffs list does not) and the last one on record is the
+        # supervisor's: validated replies are appended behind it, so "last from supervisor"
+        # means unanswered. A stale issue left by an earlier contract_error is not due.
+        reply_due = (
+            issued is not None and issued["from_agent"] == "supervisor" and state.get("handoffs_used", 0) > 0
+        )
         if cfg.footgun == "03-untyped-handoff":
             if inbox is not None:
                 # The untyped supervisor trusts the dict, routes on a string, and treats a
@@ -141,7 +145,9 @@ def build_orchestrator(cfg: OrchestratorConfig) -> Orchestrator:
         elif reply_due or inbox is not None:
             try:
                 if inbox is None:
-                    raise HandoffContractError(f"{issued['to_agent']} returned no handoff")
+                    raise HandoffContractError(
+                        f"no handoff for {issued['to_agent']} attempt {issued['attempt']}: the inbox is empty"
+                    )
                 handoff = Handoff.model_validate(inbox)
                 if handoff.to_agent != "supervisor":
                     raise HandoffContractError(

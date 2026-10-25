@@ -80,3 +80,38 @@ def test_hard_process_death_resumes_from_the_last_checkpoint(make_orchestrator, 
     assert call_log.count("researcher") == 0
     assert call_log.count("writer") == 1
     assert len(sink.records) == 1
+
+
+def test_manual_recovery_supplies_the_handoff_through_the_inbox(make_orchestrator, make_config, sink):
+    def crashing_writer(handoff):
+        raise RuntimeError("worker process died")
+
+    orch = make_orchestrator(make_config(writer=crashing_writer))
+    with pytest.raises(RuntimeError):
+        run(orch, initial_state("t1", "recovery"), "thread-1")
+
+    # An operator finishes the writer's job by hand. The handoff goes through the same
+    # inbox and the same validation as a reply the worker would have returned.
+    issued = orch.graph.get_state({"configurable": {"thread_id": "thread-1"}}).values["handoffs"][-1]
+    assert (issued["from_agent"], issued["to_agent"]) == ("supervisor", "writer")
+    orch.graph.update_state(
+        {"configurable": {"thread_id": "thread-1"}},
+        {
+            "inbox": {
+                "task_id": "t1",
+                "from_agent": "writer",
+                "to_agent": "supervisor",
+                "attempt": issued["attempt"],
+                "payload": {"draft": "# recovery\n\nwritten by hand"},
+            }
+        },
+        as_node="writer",
+    )
+    state = run(orch, None, "thread-1")
+    ask = pending_interrupt(orch, "thread-1")
+    assert ask is not None
+    assert ask["draft"].startswith("# recovery")
+
+    state = run(orch, approve(ask["payload_sha"]), "thread-1")
+    assert state["status"] == "dispatched"
+    assert len(sink.records) == 1
