@@ -1,13 +1,17 @@
-"""Claim-then-send ledger: the external call happens at most once per key.
+"""Claim-then-send ledger: the external call happens at most once per (thread, task).
 
-Two rows states: `claimed` (we are about to send, or we sent and never heard back) and
+Two row states: `claimed` (we are about to send, or we sent and never heard back) and
 `sent` (the sink confirmed). A retry that finds `claimed` does not send again: that is the
 at-most-once choice, and the row is the operator's evidence that a confirmation is missing.
+The row also keeps the hash of what was sent, so a later version of the same task is told
+the task already went out instead of going out twice.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -15,43 +19,46 @@ from typing import Literal
 ClaimResult = Literal["new", "claimed", "sent"]
 
 
+def ledger_key(thread_id: str, task_id: str) -> str:
+    """One key per (thread, task) that cannot collide however the two ids are spelled."""
+    return json.dumps([thread_id, task_id])
+
+
 class DispatchLedger:
     def __init__(self, path: str | Path):
         self.path = str(path)
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             con.execute(
                 "create table if not exists dispatch_ledger ("
-                " key text primary key, state text not null, claimed_at text not null, sent_at text)"
+                " key text primary key, state text not null, payload_sha text not null,"
+                " claimed_at text not null, sent_at text)"
             )
 
     def _connect(self) -> sqlite3.Connection:
         # Autocommit mode: transactions are explicit below.
         return sqlite3.connect(self.path, isolation_level=None)
 
-    def claim(self, key: str) -> ClaimResult:
-        """Insert the claim unless a row exists; report what was there before."""
-        with self._connect() as con:
+    def claim(self, key: str, payload_sha: str) -> tuple[ClaimResult, str | None]:
+        """Insert the claim unless a row exists; report what was there before and its hash."""
+        with closing(self._connect()) as con:
             con.execute("begin immediate")
-            row = con.execute("select state from dispatch_ledger where key = ?", (key,)).fetchone()
+            row = con.execute("select state, payload_sha from dispatch_ledger where key = ?", (key,)).fetchone()
             if row is not None:
                 con.execute("commit")
-                return row[0]
+                return row[0], row[1]
             con.execute(
-                "insert into dispatch_ledger (key, state, claimed_at) values (?, 'claimed', ?)",
-                (key, _now()),
+                "insert into dispatch_ledger (key, state, payload_sha, claimed_at) values (?, 'claimed', ?, ?)",
+                (key, payload_sha, _now()),
             )
             con.execute("commit")
-            return "new"
+            return "new", None
 
     def mark_sent(self, key: str) -> None:
-        with self._connect() as con:
-            con.execute(
-                "update dispatch_ledger set state = 'sent', sent_at = ? where key = ?",
-                (_now(), key),
-            )
+        with closing(self._connect()) as con:
+            con.execute("update dispatch_ledger set state = 'sent', sent_at = ? where key = ?", (_now(), key))
 
     def state(self, key: str) -> str | None:
-        with self._connect() as con:
+        with closing(self._connect()) as con:
             row = con.execute("select state from dispatch_ledger where key = ?", (key,)).fetchone()
         return None if row is None else row[0]
 

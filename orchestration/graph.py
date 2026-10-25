@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import operator
 import sqlite3
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.runnables import RunnableConfig
@@ -23,8 +24,8 @@ from langgraph.types import Command, interrupt
 from pydantic import ValidationError
 
 from .config import OrchestratorConfig
-from .contracts import Handoff, HandoffContractError, payload_sha
-from .ledger import DispatchLedger
+from .contracts import REPLY_MODELS, Handoff, HandoffContractError, payload_sha
+from .ledger import DispatchLedger, ledger_key
 from .workers import WorkerFn
 
 Worker = Literal["researcher", "writer"]
@@ -68,14 +69,36 @@ def thread_config(thread_id: str, recursion_limit: int | None = None) -> Runnabl
     return config
 
 
-def run(graph, payload, thread_id: str, recursion_limit: int | None = None) -> OrchestrationState:
-    """Invoke or resume a thread with checkpoints written before the next step starts."""
-    return graph.invoke(payload, config=thread_config(thread_id, recursion_limit), durability="sync")
+@dataclass
+class Orchestrator:
+    """A compiled graph, the configuration that built it, and the checkpoint connection."""
+
+    graph: Any
+    config: OrchestratorConfig
+    connection: sqlite3.Connection | None = None
+
+    @property
+    def durability(self) -> Literal["sync", "async", "exit"]:
+        """Checkpoints are written before the next step starts, so a hard crash loses nothing."""
+        if self.config.footgun == "07-durability-exit":
+            # Checkpoints only when the run pauses or ends: a process killed mid-run leaves none.
+            return "exit"
+        return "sync"
+
+    def close(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
 
 
-def pending_interrupt(graph, thread_id: str) -> dict[str, Any] | None:
+def run(orch: Orchestrator, payload, thread_id: str, recursion_limit: int | None = None) -> OrchestrationState:
+    """Invoke or resume a thread."""
+    return orch.graph.invoke(payload, config=thread_config(thread_id, recursion_limit), durability=orch.durability)
+
+
+def pending_interrupt(orch: Orchestrator, thread_id: str) -> dict[str, Any] | None:
     """The question the thread is paused on, or None when nothing is pending."""
-    snapshot = graph.get_state(thread_config(thread_id))
+    snapshot = orch.graph.get_state(thread_config(thread_id))
     for task in snapshot.tasks:
         if task.interrupts:
             return task.interrupts[0].value
@@ -91,7 +114,7 @@ def reject() -> Command:
     return Command(resume={"decision": "reject"})
 
 
-def build_graph(cfg: OrchestratorConfig):
+def build_orchestrator(cfg: OrchestratorConfig) -> Orchestrator:
     ledger = DispatchLedger(cfg.ledger_path)
 
     def supervisor(state: OrchestrationState) -> Command[Literal["researcher", "writer", "approval", "__end__"]]:
@@ -106,6 +129,7 @@ def build_graph(cfg: OrchestratorConfig):
                 if inbox.get("to_agent") != "supervisor":
                     return Command(goto=END, update={**update, "status": "done", "pending": []})
             else:
+                issued = state["handoffs"][-1]  # the handoff this reply must answer
                 try:
                     handoff = Handoff.model_validate(inbox)
                     if handoff.to_agent != "supervisor":
@@ -116,13 +140,22 @@ def build_graph(cfg: OrchestratorConfig):
                         raise HandoffContractError(
                             f"handoff for task {handoff.task_id!r}, expected {task['task_id']!r}"
                         )
+                    if handoff.from_agent != issued["to_agent"]:
+                        raise HandoffContractError(
+                            f"handoff from {handoff.from_agent!r}, expected from {issued['to_agent']!r}"
+                        )
+                    if handoff.attempt != issued["attempt"]:
+                        raise HandoffContractError(
+                            f"handoff attempt {handoff.attempt}, expected {issued['attempt']}"
+                        )
+                    reply = REPLY_MODELS[handoff.from_agent].model_validate(handoff.payload)
                 except (ValidationError, HandoffContractError) as exc:
                     # Refuse the run and keep the task pending; never route on a guess.
                     return Command(
                         goto=END,
                         update={**update, "status": "contract_error", "error": f"{type(exc).__name__}: {exc}"},
                     )
-                update.update(_apply_payload(handoff.payload))
+                update.update(_apply_payload(reply.model_dump(exclude_none=True)))
                 update["handoffs"] = [handoff.model_dump()]
 
         view = {**state, **update}
@@ -209,14 +242,20 @@ def build_graph(cfg: OrchestratorConfig):
             cfg.sink.publish(task_id, draft)
             return {"status": "dispatched", "pending": []}
 
-        key = f"{config['configurable']['thread_id']}:{task_id}"
-        claim = ledger.claim(key)
+        key = ledger_key(config["configurable"]["thread_id"], task_id)
+        sha = payload_sha(task_id, draft)
+        claim, sent_sha = ledger.claim(key, sha)
         if claim == "sent":
-            return {"status": "dispatched", "pending": []}
+            if sent_sha == sha:
+                return {"status": "dispatched", "pending": []}  # a replay of the same send
+            return {
+                "status": "already_dispatched",
+                "error": f"task {task_id!r} already went out on this thread with a different draft; not sending twice",
+            }
         if claim == "claimed":
             return {
                 "status": "dispatch_unconfirmed",
-                "error": f"ledger key {key!r} was claimed but never confirmed; check the sink before retrying",
+                "error": f"ledger key {key} was claimed but never confirmed; check the sink before retrying",
             }
         cfg.sink.publish(task_id, draft)
         ledger.mark_sent(key)
@@ -236,7 +275,8 @@ def build_graph(cfg: OrchestratorConfig):
     builder.add_edge("writer", "supervisor")
     builder.add_conditional_edges("approval", after_approval, ["dispatch", "approval", END])
     builder.add_conditional_edges("dispatch", after_dispatch, ["approval", END])
-    return builder.compile(checkpointer=_checkpointer(cfg))
+    checkpointer, connection = _checkpointer(cfg)
+    return Orchestrator(graph=builder.compile(checkpointer=checkpointer), config=cfg, connection=connection)
 
 
 def _apply_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -256,8 +296,9 @@ def _next_agent(view: dict[str, Any]) -> Literal["researcher", "writer", "approv
     return "approval"
 
 
-def _checkpointer(cfg: OrchestratorConfig):
+def _checkpointer(cfg: OrchestratorConfig) -> tuple[Any, sqlite3.Connection | None]:
     if cfg.footgun == "06-in-memory-checkpointer":
         # Checkpoints that die with the process: a restart cannot resume the thread.
-        return InMemorySaver()
-    return SqliteSaver(sqlite3.connect(str(cfg.checkpoint_path), check_same_thread=False))
+        return InMemorySaver(), None
+    connection = sqlite3.connect(str(cfg.checkpoint_path), check_same_thread=False)
+    return SqliteSaver(connection), connection

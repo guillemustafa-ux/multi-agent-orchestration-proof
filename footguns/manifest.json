@@ -7,30 +7,44 @@
         "tests/test_approval.py::test_approval_without_hash_fails_closed",
         "tests/test_approval.py::test_reject_dispatches_nothing",
         "tests/test_approval.py::test_stale_approval_does_not_dispatch_an_edited_draft",
+        "tests/test_approval.py::test_unrecognised_decision_re_asks",
         "tests/test_dispatch.py::test_approval_resume_publishes_exactly_once",
         "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly",
+        "tests/test_dispatch.py::test_ledger_key_separates_thread_and_task_ids",
+        "tests/test_dispatch.py::test_ledger_row_is_sent_after_dispatch",
+        "tests/test_dispatch.py::test_second_version_of_a_dispatched_task_is_not_sent_again",
+        "tests/test_durability.py::test_hard_process_death_resumes_from_the_last_checkpoint",
         "tests/test_durability.py::test_restart_after_crash_resumes_without_rerunning_researcher",
         "tests/test_handoffs.py::test_happy_path_dispatches_once_after_approval"
       ]
     },
     {
       "name": "02-no-dispatch-ledger",
-      "reintroduces": "The dispatch node sends without the claim-then-send ledger. A retry after a crash sends again.",
+      "reintroduces": "The dispatch node sends without the claim-then-send ledger. A retry after a crash sends again, and a corrected version of a task that already went out goes out too.",
       "expected_failures": [
-        "tests/test_dispatch.py::test_approval_resume_publishes_exactly_once",
-        "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly"
+        "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly",
+        "tests/test_dispatch.py::test_ledger_row_is_sent_after_dispatch",
+        "tests/test_dispatch.py::test_second_version_of_a_dispatched_task_is_not_sent_again"
       ]
     },
     {
       "name": "03-untyped-handoff",
-      "reintroduces": "The supervisor trusts the worker's dict and routes on a string; a destination it does not know means 'finished'. A malformed handoff ends the run as a success with nothing dispatched.",
+      "reintroduces": "The supervisor trusts the worker's dict and routes on a string; a destination it does not know means 'finished'. A malformed handoff ends the run as a success with nothing dispatched, and forged or mistyped replies are applied as if valid.",
       "expected_failures": [
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[addressed-to-researcher]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[draft-not-a-string]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[empty-payload]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[extra-envelope-key]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[forged-attempt]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[forged-sender]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[misspelled-payload-key]",
+        "tests/test_handoffs.py::test_contract_violations_end_the_run_as_contract_error[other-task]",
         "tests/test_handoffs.py::test_malformed_handoff_is_rejected_not_dropped"
       ]
     },
     {
       "name": "04-no-loop-budget",
-      "reintroduces": "No per-thread handoff budget. Two workers that keep asking each other for more run until LangGraph's recursion_limit stops them.",
+      "reintroduces": "No per-submission handoff budget. Two workers that keep asking each other for more run until LangGraph's recursion_limit stops them.",
       "expected_failures": [
         "tests/test_handoffs.py::test_loop_budget_stops_ping_pong_before_recursion_limit"
       ]
@@ -45,9 +59,17 @@
     },
     {
       "name": "06-in-memory-checkpointer",
-      "reintroduces": "Checkpoints live in process memory. A restart has nothing to resume: the thread, and the researcher's finished work, are gone.",
+      "reintroduces": "Checkpoints live in process memory. A new process has nothing to resume: the thread, and the researcher's finished work, are gone.",
       "expected_failures": [
+        "tests/test_durability.py::test_hard_process_death_resumes_from_the_last_checkpoint",
         "tests/test_durability.py::test_restart_after_crash_resumes_without_rerunning_researcher"
+      ]
+    },
+    {
+      "name": "07-durability-exit",
+      "reintroduces": "durability=\"exit\": checkpoints are written only when the run pauses or ends. A process killed mid-run leaves nothing on disk, so the restart cannot resume; an exception still gets its checkpoint, which is why only the hard-death test notices.",
+      "expected_failures": [
+        "tests/test_durability.py::test_hard_process_death_resumes_from_the_last_checkpoint"
       ]
     }
   ]

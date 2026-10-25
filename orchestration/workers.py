@@ -39,7 +39,7 @@ def default_writer(handoff: Handoff) -> dict[str, Any]:
 
 
 class Sink(Protocol):
-    """Where the approved draft leaves the system: the call that must happen exactly once."""
+    """Where the approved draft leaves the system: the call that must never happen twice."""
 
     def publish(self, task_id: str, draft: str) -> None: ...
 
