@@ -9,7 +9,8 @@ one seam, because the thing that breaks in production is the orchestration aroun
 model: a handoff dropped or applied on a malformed reply, a side effect that runs twice on
 resume, an approval that releases a draft nobody approved, two agents looping until the
 bill arrives, a restart that cannot pick the thread back up. Each of those has a test here,
-and each has a footgun that reintroduces it so you can watch the suite catch it.
+and each has a footgun that reintroduces it so you can watch the suite catch it; two more
+tests guard regressions found while building it.
 
 ## Run it
 
@@ -27,11 +28,17 @@ Python 3.13, LangGraph 1.1.6 and langchain-core 1.7.0; CI runs Python 3.11 and 3
 
 | Guarantee | Where | Tests | Footgun that removes it |
 |---|---|---|---|
-| Every worker reply is validated at the supervisor boundary: envelope, sender, attempt, task, and a per-role payload model with no coercion; a worker that returns nothing is a contract error too. Anything else ends the run as `contract_error` with the task still pending, never routed on a guess, never applied, never silently finished | `orchestration/contracts.py`, `supervisor` in `graph.py` | `test_malformed_handoff_is_rejected_not_dropped`, `test_contract_violations_end_the_run_as_contract_error` (12 cases), `test_blank_researcher_notes_are_a_contract_error`, `test_resubmission_after_contract_error_runs_the_task_again` | 03 |
+| Every worker reply is validated at the supervisor boundary: envelope, sender, attempt, task, and a per-role payload model with no coercion; a worker that returns nothing is a contract error too. Anything else ends the run as `contract_error` with the task still pending, never routed on a guess, never applied, never silently finished | `orchestration/contracts.py`, `supervisor` in `graph.py` | `test_malformed_handoff_is_rejected_not_dropped`, `test_contract_violations_end_the_run_as_contract_error` (12 cases), `test_blank_researcher_notes_are_a_contract_error` | 03 |
 | A human approves exactly the payload they were shown: the approval carries the SHA-256 of the draft; the gate re-asks on an answer it does not recognise, and dispatch refuses any other draft or an approval with no hash | `approval`, `dispatch` | `test_stale_approval_does_not_dispatch_an_edited_draft`, `test_approval_without_hash_fails_closed`, `test_unrecognised_decision_re_asks`, `test_reject_dispatches_nothing` | 05, 01 |
 | The external call happens at most once per `(thread_id, task_id)`: across the interrupt resume (the send lives in its own node after the gate), across a crash after the server accepted the call (the ledger), and across a corrected version approved later (the ledger keeps the hash of what went out) | `orchestration/ledger.py`, `dispatch` | `test_approval_resume_publishes_exactly_once`, `test_ledger_row_is_sent_after_dispatch`, `test_crash_after_publish_is_not_retried_blindly`, `test_second_version_of_a_dispatched_task_is_not_sent_again`, `test_ledger_key_separates_thread_and_task_ids` | 01, 02 |
-| A restart resumes the thread from its last checkpoint instead of redoing finished work: after a worker exception, and after a real process killed mid-run with `os._exit(1)`; an operator can finish a crashed worker's job by hand through the same validated inbox | `SqliteSaver`, `durability="sync"` | `test_restart_after_crash_resumes_without_rerunning_researcher`, `test_hard_process_death_resumes_from_the_last_checkpoint`, `test_manual_recovery_supplies_the_handoff_through_the_inbox` | 06, 07 |
+| A restart resumes the thread from its last checkpoint instead of redoing finished work: after a worker exception, and after a real process killed mid-run with `os._exit(1)` | `SqliteSaver`, `durability="sync"` | `test_restart_after_crash_resumes_without_rerunning_researcher`, `test_hard_process_death_resumes_from_the_last_checkpoint` | 06, 07 |
 | Two workers that keep asking each other for more are stopped by a handoff budget, long before LangGraph's `recursion_limit` | `max_handoffs`, `supervisor` | `test_loop_budget_stops_ping_pong_before_recursion_limit` | 04 |
+
+Two regression tests guard paths no footgun reintroduces: a task re-submitted on the same
+thread after a `contract_error` runs again instead of being refused for the stale handoff
+(`test_resubmission_after_contract_error_runs_the_task_again`), and an operator can finish a
+crashed worker's job through the validated inbox
+(`test_manual_recovery_supplies_the_handoff_through_the_inbox`).
 
 ## The graph
 
@@ -83,10 +90,13 @@ attempt, an extra envelope key, a draft that is a number, a misspelled payload k
 payload, a draft and a request for more research at once, an empty draft, a blank draft, and
 no reply; two more tests cover blank researcher notes and the re-submission.
 
-The same door is the only door. An operator who finishes a crashed worker's job by hand
-puts the worker's handoff in `inbox` (`update_state(..., {"inbox": {...}}, as_node="writer")`)
-and it is validated like any reply; editing `draft` directly leaves the inbox empty and the
-supervisor refuses with `no handoff for writer attempt N: the inbox is empty`.
+For a crashed worker, the supported way in is the inbox: an operator puts the worker's
+handoff there (`update_state(..., {"inbox": {...}}, as_node="writer")`) and it is validated
+like any reply; writing `draft` instead leaves the inbox empty and the supervisor refuses with
+`no handoff for writer attempt N: the inbox is empty`. The contract guards what workers
+return, not what an operator writes: `update_state` sets state channels directly, so a draft
+edited while the run waits at the gate is not validated again, only approved again by its
+hash.
 
 ### The approval gate
 
