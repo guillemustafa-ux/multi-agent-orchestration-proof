@@ -1,0 +1,54 @@
+{
+  "footguns": [
+    {
+      "name": "01-side-effect-before-interrupt",
+      "reintroduces": "The publish call moves into the approval node, before interrupt(). The node re-runs from the top on resume, so it sends again; and it already sent before anyone answered.",
+      "expected_failures": [
+        "tests/test_approval.py::test_approval_without_hash_fails_closed",
+        "tests/test_approval.py::test_reject_dispatches_nothing",
+        "tests/test_approval.py::test_stale_approval_does_not_dispatch_an_edited_draft",
+        "tests/test_dispatch.py::test_approval_resume_publishes_exactly_once",
+        "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly",
+        "tests/test_durability.py::test_restart_after_crash_resumes_without_rerunning_researcher",
+        "tests/test_handoffs.py::test_happy_path_dispatches_once_after_approval"
+      ]
+    },
+    {
+      "name": "02-no-dispatch-ledger",
+      "reintroduces": "The dispatch node sends without the claim-then-send ledger. A retry after a crash sends again.",
+      "expected_failures": [
+        "tests/test_dispatch.py::test_approval_resume_publishes_exactly_once",
+        "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly"
+      ]
+    },
+    {
+      "name": "03-untyped-handoff",
+      "reintroduces": "The supervisor trusts the worker's dict and routes on a string; a destination it does not know means 'finished'. A malformed handoff ends the run as a success with nothing dispatched.",
+      "expected_failures": [
+        "tests/test_handoffs.py::test_malformed_handoff_is_rejected_not_dropped"
+      ]
+    },
+    {
+      "name": "04-no-loop-budget",
+      "reintroduces": "No per-thread handoff budget. Two workers that keep asking each other for more run until LangGraph's recursion_limit stops them.",
+      "expected_failures": [
+        "tests/test_handoffs.py::test_loop_budget_stops_ping_pong_before_recursion_limit"
+      ]
+    },
+    {
+      "name": "05-approval-not-bound",
+      "reintroduces": "The approval is a bare decision, not bound to the hash of the draft. A draft edited after the reviewer saw it, or an approval with no hash at all, is dispatched.",
+      "expected_failures": [
+        "tests/test_approval.py::test_approval_without_hash_fails_closed",
+        "tests/test_approval.py::test_stale_approval_does_not_dispatch_an_edited_draft"
+      ]
+    },
+    {
+      "name": "06-in-memory-checkpointer",
+      "reintroduces": "Checkpoints live in process memory. A restart has nothing to resume: the thread, and the researcher's finished work, are gone.",
+      "expected_failures": [
+        "tests/test_durability.py::test_restart_after_crash_resumes_without_rerunning_researcher"
+      ]
+    }
+  ]
+}
