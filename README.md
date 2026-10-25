@@ -16,7 +16,7 @@ and each has a footgun that reintroduces it so you can watch the suite catch it.
 ```bash
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .[test]
-pytest                      # 26 passed
+pytest                      # 29 passed
 python footguns/run.py      # baseline + 7 footguns, ends with: all footguns caught
 ```
 
@@ -27,10 +27,10 @@ Python 3.13, LangGraph 1.1.6 and langchain-core 1.7.0; CI runs Python 3.11 and 3
 
 | Guarantee | Where | Tests | Footgun that removes it |
 |---|---|---|---|
-| Every worker reply is validated at the supervisor boundary: envelope, sender, attempt, task, and a per-role payload model with no coercion; a worker that returns nothing is a contract error too. Anything else ends the run as `contract_error` with the task still pending, never routed on a guess, never applied, never silently finished | `orchestration/contracts.py`, `supervisor` in `graph.py` | `test_malformed_handoff_is_rejected_not_dropped`, `test_contract_violations_end_the_run_as_contract_error` (12 cases) | 03 |
+| Every worker reply is validated at the supervisor boundary: envelope, sender, attempt, task, and a per-role payload model with no coercion; a worker that returns nothing is a contract error too. Anything else ends the run as `contract_error` with the task still pending, never routed on a guess, never applied, never silently finished | `orchestration/contracts.py`, `supervisor` in `graph.py` | `test_malformed_handoff_is_rejected_not_dropped`, `test_contract_violations_end_the_run_as_contract_error` (12 cases), `test_blank_researcher_notes_are_a_contract_error`, `test_resubmission_after_contract_error_runs_the_task_again` | 03 |
 | A human approves exactly the payload they were shown: the approval carries the SHA-256 of the draft; the gate re-asks on an answer it does not recognise, and dispatch refuses any other draft or an approval with no hash | `approval`, `dispatch` | `test_stale_approval_does_not_dispatch_an_edited_draft`, `test_approval_without_hash_fails_closed`, `test_unrecognised_decision_re_asks`, `test_reject_dispatches_nothing` | 05, 01 |
 | The external call happens at most once per `(thread_id, task_id)`: across the interrupt resume (the send lives in its own node after the gate), across a crash after the server accepted the call (the ledger), and across a corrected version approved later (the ledger keeps the hash of what went out) | `orchestration/ledger.py`, `dispatch` | `test_approval_resume_publishes_exactly_once`, `test_ledger_row_is_sent_after_dispatch`, `test_crash_after_publish_is_not_retried_blindly`, `test_second_version_of_a_dispatched_task_is_not_sent_again`, `test_ledger_key_separates_thread_and_task_ids` | 01, 02 |
-| A restart resumes the thread from its last checkpoint instead of redoing finished work: after a worker exception, and after a real process killed mid-run with `os._exit(1)` | `SqliteSaver`, `durability="sync"` | `test_restart_after_crash_resumes_without_rerunning_researcher`, `test_hard_process_death_resumes_from_the_last_checkpoint` | 06, 07 |
+| A restart resumes the thread from its last checkpoint instead of redoing finished work: after a worker exception, and after a real process killed mid-run with `os._exit(1)`; an operator can finish a crashed worker's job by hand through the same validated inbox | `SqliteSaver`, `durability="sync"` | `test_restart_after_crash_resumes_without_rerunning_researcher`, `test_hard_process_death_resumes_from_the_last_checkpoint`, `test_manual_recovery_supplies_the_handoff_through_the_inbox` | 06, 07 |
 | Two workers that keep asking each other for more are stopped by a handoff budget, long before LangGraph's `recursion_limit` | `max_handoffs`, `supervisor` | `test_loop_budget_stops_ping_pong_before_recursion_limit` | 04 |
 
 ## The graph
@@ -76,11 +76,17 @@ the supervisor validates it as a `Handoff`, then checks that it is addressed to 
 supervisor, belongs to the current task, comes from the agent the supervisor handed off to,
 and carries the same `attempt` number the supervisor issued; then it validates the payload
 with the sender's reply model. Any failure, including no reply, ends the run with
-`status = "contract_error"`, the message in `error`, and the task still in `pending`. The
-parametrized test covers a reply addressed elsewhere, for another task, with a forged sender,
-a forged attempt, an extra envelope key, a draft that is a number, a misspelled payload key,
-an empty payload, a draft and a request for more research at once, an empty draft, a blank
-draft, and no reply.
+`status = "contract_error"`, the message in `error`, and the task still in `pending`; the same
+task can be submitted again on the same thread once the worker is fixed. The parametrized
+test covers a reply addressed elsewhere, for another task, with a forged sender, a forged
+attempt, an extra envelope key, a draft that is a number, a misspelled payload key, an empty
+payload, a draft and a request for more research at once, an empty draft, a blank draft, and
+no reply; two more tests cover blank researcher notes and the re-submission.
+
+The same door is the only door. An operator who finishes a crashed worker's job by hand
+puts the worker's handoff in `inbox` (`update_state(..., {"inbox": {...}}, as_node="writer")`)
+and it is validated like any reply; editing `draft` directly leaves the inbox empty and the
+supervisor refuses with `no handoff for writer attempt N: the inbox is empty`.
 
 ### The approval gate
 
@@ -156,25 +162,25 @@ fail or error, that every other test still passes, and that the baseline is gree
 
 | # | Footgun | What it reintroduces | Reference | Tests that must fail |
 |---|---|---|---|---|
-| 01 | `01-side-effect-before-interrupt` | The publish call moves into the approval node, before `interrupt()`. The node re-runs from the top on resume, so it sends again; and it already sent before anyone answered, so a rejection has published too | [LangGraph: side effects called before `interrupt` must be idempotent](https://docs.langchain.com/oss/python/langgraph/interrupts) | 12 of 26: every test that reaches the gate |
+| 01 | `01-side-effect-before-interrupt` | The publish call moves into the approval node, before `interrupt()`. The node re-runs from the top on resume, so it sends again; and it already sent before anyone answered, so a rejection has published too | [LangGraph: side effects called before `interrupt` must be idempotent](https://docs.langchain.com/oss/python/langgraph/interrupts) | 14 of 29: every test that reaches the gate |
 | 02 | `02-no-dispatch-ledger` | Dispatch sends without the ledger. The retry after a crash sends again, and a corrected version of a task that already went out goes out too | [LangGraph: re-execution and idempotency](https://docs.langchain.com/oss/python/langgraph/graph-api) | `test_crash_after_publish_is_not_retried_blindly`, `test_second_version_of_a_dispatched_task_is_not_sent_again`, `test_ledger_row_is_sent_after_dispatch` |
-| 03 | `03-untyped-handoff` | The supervisor trusts the dict and routes on `to_agent` as a string; a destination it does not know means "finished", and no reply at all is just re-dispatched. The malformed handoff ends the run as `done` with nothing dispatched; forged senders, forged attempts, a numeric draft and a blank draft are applied as if valid; a worker that returns nothing burns the budget | The default branch of a routing function | `test_malformed_handoff_is_rejected_not_dropped` (`assert 'done' == 'contract_error'`) and the 12 contract cases |
+| 03 | `03-untyped-handoff` | The supervisor trusts the dict and routes on `to_agent` as a string; a destination it does not know means "finished", and no reply at all is just re-dispatched. The malformed handoff ends the run as `done` with nothing dispatched; forged senders, forged attempts, a numeric draft and a blank draft are applied as if valid; a worker that returns nothing burns the budget | The default branch of a routing function | 15 ids: `test_malformed_handoff_is_rejected_not_dropped` (`assert 'done' == 'contract_error'`), the 12 contract cases, blank notes and the re-submission |
 | 04 | `04-no-loop-budget` | No handoff budget. The ping-pong runs until `GraphRecursionError: Recursion limit of 200 reached` (10,007 super-steps and over a minute with the default limit) | [LangGraph: `recursion_limit`](https://docs.langchain.com/oss/python/langgraph/graph-api) | `test_loop_budget_stops_ping_pong_before_recursion_limit` |
 | 05 | `05-approval-not-bound` | The approval is a bare decision. A draft edited after review, or an approval with no hash, is dispatched | Same shape as the bound approvals in [hermes-agent-hardened-setup](https://github.com/guillemustafa-ux/hermes-agent-hardened-setup) | `test_stale_approval_does_not_dispatch_an_edited_draft`, `test_approval_without_hash_fails_closed` |
-| 06 | `06-in-memory-checkpointer` | Checkpoints live in process memory. A new orchestrator has nothing to resume: `EmptyInputError: Received no input for __start__`; a real system would start the task over and rerun the researcher | [LangGraph: checkpointers and durability](https://docs.langchain.com/oss/python/langgraph/checkpointers) | both durability tests |
+| 06 | `06-in-memory-checkpointer` | Checkpoints live in process memory. A new orchestrator has nothing to resume: `EmptyInputError: Received no input for __start__`; a real system would start the task over and rerun the researcher | [LangGraph: checkpointers and durability](https://docs.langchain.com/oss/python/langgraph/checkpointers) | `test_restart_after_crash_resumes_without_rerunning_researcher`, `test_hard_process_death_resumes_from_the_last_checkpoint` |
 | 07 | `07-durability-exit` | `durability="exit"`: checkpoints only when the run pauses or ends. The process killed mid-run leaves nothing on disk. A worker exception still gets its checkpoint, which is why only the hard-death test notices | [LangGraph: checkpointers and durability](https://docs.langchain.com/oss/python/langgraph/checkpointers) | `test_hard_process_death_resumes_from_the_last_checkpoint` |
 
 Expected tail of `python footguns/run.py`:
 
 ```text
-baseline: exit 0, 26 passed, 0 failed
-01-side-effect-before-interrupt: exit 1, 14 passed, 12 failed (expected 12) -> CAUGHT
-02-no-dispatch-ledger: exit 1, 23 passed, 3 failed (expected 3) -> CAUGHT
-03-untyped-handoff: exit 1, 13 passed, 13 failed (expected 13) -> CAUGHT
-04-no-loop-budget: exit 1, 25 passed, 1 failed (expected 1) -> CAUGHT
-05-approval-not-bound: exit 1, 24 passed, 2 failed (expected 2) -> CAUGHT
-06-in-memory-checkpointer: exit 1, 24 passed, 2 failed (expected 2) -> CAUGHT
-07-durability-exit: exit 1, 25 passed, 1 failed (expected 1) -> CAUGHT
+baseline: exit 0, 29 passed, 0 failed
+01-side-effect-before-interrupt: exit 1, 15 passed, 14 failed (expected 14) -> CAUGHT
+02-no-dispatch-ledger: exit 1, 26 passed, 3 failed (expected 3) -> CAUGHT
+03-untyped-handoff: exit 1, 14 passed, 15 failed (expected 15) -> CAUGHT
+04-no-loop-budget: exit 1, 28 passed, 1 failed (expected 1) -> CAUGHT
+05-approval-not-bound: exit 1, 27 passed, 2 failed (expected 2) -> CAUGHT
+06-in-memory-checkpointer: exit 1, 27 passed, 2 failed (expected 2) -> CAUGHT
+07-durability-exit: exit 1, 28 passed, 1 failed (expected 1) -> CAUGHT
 all footguns caught
 ```
 
