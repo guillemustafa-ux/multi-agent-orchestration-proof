@@ -1,6 +1,6 @@
 from .config import OrchestratorConfig
 from .contracts import FOOTGUNS, Handoff, HandoffContractError, ResearcherReply, WriterReply, payload_sha
-from .graph import Orchestrator, approve, build_orchestrator, initial_state, pending_interrupt, reject, run, thread_config
+from .graph import Orchestrator, approve, build_orchestrator, initial_state, pending_interrupt, reject, resume_dispatch, run, thread_config
 from .ledger import DispatchLedger, ledger_key
 from .workers import RecordingSink, Sink, WorkerFn, default_researcher, default_writer
 
@@ -25,6 +25,7 @@ __all__ = [
     "payload_sha",
     "pending_interrupt",
     "reject",
+    "resume_dispatch",
     "run",
     "thread_config",
 ]

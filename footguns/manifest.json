@@ -12,6 +12,10 @@
         "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly",
         "tests/test_dispatch.py::test_ledger_key_separates_thread_and_task_ids",
         "tests/test_dispatch.py::test_ledger_row_is_sent_after_dispatch",
+        "tests/test_dispatch.py::test_operator_confirm_closes_an_unconfirmed_dispatch_without_sending_again",
+        "tests/test_dispatch.py::test_operator_release_lets_a_refused_publish_go_out_once",
+        "tests/test_dispatch.py::test_resume_dispatch_refuses_a_thread_that_is_not_waiting_on_a_dispatch",
+        "tests/test_dispatch.py::test_resume_dispatch_still_checks_the_recorded_approval",
         "tests/test_dispatch.py::test_second_version_of_a_dispatched_task_is_not_sent_again",
         "tests/test_durability.py::test_hard_process_death_resumes_from_the_last_checkpoint",
         "tests/test_durability.py::test_manual_recovery_supplies_the_handoff_through_the_inbox",
@@ -26,6 +30,9 @@
       "expected_failures": [
         "tests/test_dispatch.py::test_crash_after_publish_is_not_retried_blindly",
         "tests/test_dispatch.py::test_ledger_row_is_sent_after_dispatch",
+        "tests/test_dispatch.py::test_operator_confirm_closes_an_unconfirmed_dispatch_without_sending_again",
+        "tests/test_dispatch.py::test_operator_release_lets_a_refused_publish_go_out_once",
+        "tests/test_dispatch.py::test_resume_dispatch_still_checks_the_recorded_approval",
         "tests/test_dispatch.py::test_second_version_of_a_dispatched_task_is_not_sent_again"
       ]
     },
@@ -62,7 +69,8 @@
       "reintroduces": "The approval is a bare decision, not bound to the hash of the draft. A draft edited after the reviewer saw it, or an approval with no hash at all, is dispatched.",
       "expected_failures": [
         "tests/test_approval.py::test_approval_without_hash_fails_closed",
-        "tests/test_approval.py::test_stale_approval_does_not_dispatch_an_edited_draft"
+        "tests/test_approval.py::test_stale_approval_does_not_dispatch_an_edited_draft",
+        "tests/test_dispatch.py::test_resume_dispatch_still_checks_the_recorded_approval"
       ]
     },
     {

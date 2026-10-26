@@ -3,6 +3,10 @@
 Two row states: `claimed` (we are about to send, or we sent and never heard back) and
 `sent` (the sink confirmed). A retry that finds `claimed` does not send again: that is the
 at-most-once choice, and the row is the operator's evidence that a confirmation is missing.
+The operator resolves it after checking the sink: `confirm` (the publish is there) or
+`release` (it is not, so the next retry may send). Both act only on a `claimed` row, and
+only once no process is still running that dispatch: a live send also holds its row as
+`claimed`, and releasing it would let a second send through.
 The row also keeps the hash of what was sent, so a later version of the same task is told
 the task already went out instead of going out twice.
 """
@@ -56,6 +60,22 @@ class DispatchLedger:
     def mark_sent(self, key: str) -> None:
         with closing(self._connect()) as con:
             con.execute("update dispatch_ledger set state = 'sent', sent_at = ? where key = ?", (_now(), key))
+
+    def confirm(self, key: str) -> None:
+        """Operator: the sink has the publish. The claimed row becomes sent; nothing is sent."""
+        self._resolve_claimed(key, "update dispatch_ledger set state = 'sent', sent_at = ? where key = ? and state = 'claimed'", (_now(), key))
+
+    def release(self, key: str) -> None:
+        """Operator: the sink does not have the publish. The claim is dropped so a retry sends once."""
+        self._resolve_claimed(key, "delete from dispatch_ledger where key = ? and state = 'claimed'", (key,))
+
+    def _resolve_claimed(self, key: str, sql: str, params: tuple) -> None:
+        with closing(self._connect()) as con:
+            con.execute("begin immediate")
+            changed = con.execute(sql, params).rowcount
+            con.execute("commit")
+        if changed != 1:
+            raise LookupError(f"ledger key {key} has no claimed row to resolve")
 
     def state(self, key: str) -> str | None:
         with closing(self._connect()) as con:

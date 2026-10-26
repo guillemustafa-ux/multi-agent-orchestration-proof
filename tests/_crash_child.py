@@ -9,9 +9,13 @@ import sys
 
 from orchestration import OrchestratorConfig, RecordingSink, build_orchestrator, default_researcher, initial_state, run
 
+# Not 1: an uncaught exception or an import error also exits 1, and the parent must be able
+# to tell the planned death from an accident.
+DEATH_CODE = 86
+
 
 def dying_writer(handoff):
-    os._exit(1)
+    os._exit(DEATH_CODE)
 
 
 def main() -> None:

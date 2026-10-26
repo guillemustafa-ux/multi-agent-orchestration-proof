@@ -111,6 +111,21 @@ def pending_interrupt(orch: Orchestrator, thread_id: str) -> dict[str, Any] | No
     return None
 
 
+def resume_dispatch(orch: Orchestrator, thread_id: str) -> OrchestrationState:
+    """Operator: run the dispatch node again after resolving its ledger row.
+
+    The approval stays the one already recorded on the thread, so dispatch still checks its
+    hash against the draft. Use it after `DispatchLedger.confirm` or `release`, and only on a
+    thread that ended `dispatch_unconfirmed` with a draft and an approval on it: anything else
+    raises ValueError instead of reopening the gate.
+    """
+    values = orch.graph.get_state(thread_config(thread_id)).values
+    if values.get("status") != "dispatch_unconfirmed" or values.get("draft") is None or not values.get("approval"):
+        raise ValueError(f"thread {thread_id!r} is not waiting on an unconfirmed dispatch")
+    orch.graph.update_state(thread_config(thread_id), {"status": "approved"}, as_node="approval")
+    return run(orch, None, thread_id)
+
+
 def approve(payload_sha_value: str) -> Command:
     """The human approves exactly the payload whose hash they were shown."""
     return Command(resume={"decision": "approve", "payload_sha": payload_sha_value})
@@ -297,6 +312,8 @@ def build_orchestrator(cfg: OrchestratorConfig) -> Orchestrator:
 
 
 def _apply_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    # needs_more_research is rewritten on every reply, and a reply without it resets it to
+    # False: a request for more research lasts one round trip. _next_agent relies on that.
     update: dict[str, Any] = {"needs_more_research": bool(payload.get("needs_more_research", False))}
     if "notes" in payload:
         update["notes"] = payload["notes"]

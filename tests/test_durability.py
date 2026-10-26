@@ -48,7 +48,7 @@ def test_restart_after_crash_resumes_without_rerunning_researcher(make_orchestra
 
 
 def test_hard_process_death_resumes_from_the_last_checkpoint(make_orchestrator, make_config, sink, call_log, tmp_path):
-    # A real process dies inside the writer with os._exit(1): no exception, no cleanup, no
+    # A real process dies inside the writer with os._exit(86): no exception, no cleanup, no
     # chance for anything to be flushed afterwards. Only checkpoints already on disk survive.
     child = subprocess.run(
         [
@@ -63,7 +63,7 @@ def test_hard_process_death_resumes_from_the_last_checkpoint(make_orchestrator, 
         capture_output=True,
         text=True,
     )
-    assert child.returncode == 1, child.stderr
+    assert child.returncode == 86, child.stderr  # _crash_child.DEATH_CODE: the planned os._exit
 
     config = make_config(
         researcher=call_log.wrap("researcher", default_researcher),
